@@ -112,48 +112,46 @@ def parse_arguments():
     parser.add_argument('--not-sp-reps-only', action='store_true', default=False,
             help="If specified, include non-species representatives (default is species representatives only)")
     parser.add_argument('-o', '--output', type=str, help="Output file to save the the results (optional, default is stdout)")
+    parser.add_argument('--subset-table', type=str, help="Path to a subset table listing accessions to download")
     parser.add_argument('--download-genomes', action='store_true', default=False,
             help="If specified, download genomes for each accession")
     parser.add_argument('--genome-dir', type=str, help="Directory to save downloaded genomes (required if --download-genomes is specified)")
 
     return parser.parse_args()    
 
-# Main function    
-def main():    
-    # Parse arguments     
+def main():
+    # Parse arguments
     args = parse_arguments()
-    if args.download_genomes and not args.genome_dir:
-        raise ValueError("You must specify --genome-dir when --download-genomes is used.")
+
+    if args.subset_table and not args.download_genomes:
+        raise ValueError("--subset-table can only be used with --download-genomes")
+
+    if args.subset_table and args.taxon:
+        print("Warning: Both --taxon and --subset-table are provided. Using --subset-table for downloading genomes.")
+
+    # Fetch metadata based on taxon or subset table
+    if args.taxon:
+        taxon = args.taxon
+        sp_reps_only_bool = not args.not_sp_reps_only  # Default is True, unless --not-sp-reps-only is specified
+        metadata = fetch_taxon_genome_details(taxon, sp_reps_only_bool)
+    elif args.subset_table:
+        # Read subset table
+        subset_df = pd.read_csv(args.subset_table, sep='\t')
+        accessions = subset_df['Accession'].tolist()  # Adjust column name as per your subset table format
+        metadata = [{"gid": acc} for acc in accessions]
+    else:
+        raise ValueError("You must provide either --taxon or --subset-table for downloading genomes")
+
+    # Download genomes if requested
     if args.download_genomes:
+        if not args.genome_dir:
+            raise ValueError("You must specify --genome-dir when --download-genomes is used.")
         args.output = f"{args.genome_dir}/metadata.tsv"
         os.makedirs(args.genome_dir, exist_ok=True)
 
-    taxon = args.taxon    
-    sp_reps_only_bool = not args.not_sp_reps_only  # Default is True, unless --not-sp-reps-only is specified
-    
-    # Fetch metadata for the given taxon    
-    metadata = fetch_taxon_genome_details(taxon, sp_reps_only_bool)    
-    # print(metadata["rows"])
-    
-    # Print the metadata    
-    # print(json.dumps(metadata, indent=4))    
-    
-    columns_names = ["trna_aa_count", "contig_count", "n50_contigs", "longest_contig", "scaffold_count", "n50_scaffolds", "longest_scaffold", "genome_size", "gc_percentage", "ambiguous_bases", "checkm_completeness", "checkm_contamination", "checkm_strain_heterogeneity", "checkm2_completeness", "checkm2_contamination", "checkm2_model", "lsu_5s_count", "ssu_count", "lsu_23s_count", "protein_count", "coding_density", "ncbi_genbank_assembly_accession", "ncbi_strain_identifiers", "ncbi_assembly_level", "ncbi_assembly_name", "ncbi_assembly_type", "ncbi_bioproject", "ncbi_biosample", "ncbi_country", "ncbi_date", "ncbi_genome_category", "ncbi_genome_representation", "ncbi_isolate", "ncbi_isolation_source", "ncbi_lat_lon", "ncbi_molecule_count", "ncbi_cds_count", "ncbi_refseq_category", "ncbi_seq_rel_date", "ncbi_spanned_gaps", "ncbi_species_taxid", "ncbi_ssu_count", "ncbi_submitter", "ncbi_taxid", "ncbi_total_gap_length", "ncbi_translation_table", "ncbi_trna_count", "ncbi_unspanned_gaps", "ncbi_version_status", "ncbi_wgs_master", "gtdbTypeDesignation", "gtdbTypeDesignationSources", "lpsnTypeDesignation", "dsmzTypeDesignation", "lpsnPriorityYear", "gtdbTypeSpeciesOfGenus", "ncbi_taxonomy", "ncbi_taxonomy_unfiltered", "gtdb_representative", "gtdb_genome_representative", "ncbi_type_material_designation", "gtdbDomain", "gtdbPhylum", "gtdbClass", "gtdbOrder", "gtdbFamily", "gtdbGenus", "gtdbSpecies"]
-    index_names = []
-    df = []
-
-    for genome in metadata:
-        acc = genome["gid"]
-        index_names.append(acc)
-        gm = fetch_genome_metadata(acc)
-        gm = parse_genome_metadata(gm)
-        df.append(gm)
-
-    if args.download_genomes:
         for genome in tqdm(metadata, desc="Downloading genomes"):
             acc = genome["gid"]
             genome_path = pathlib.Path(args.genome_dir) / f"{acc}.fasta"
-            # genome_path = os.path.join(args.genome_dir, f"{acc}.fasta")
             if genome_path.exists():
                 print(f"Skipping download for {acc}, {genome_path} already exists.", file=sys.stderr)
                 continue
@@ -165,14 +163,40 @@ def main():
                 fna_files = [f for f in zip_ref.namelist() if f.endswith(".fna")]
                 if not fna_files:
                     raise ValueError(f"No .fna file found in ncbi_dataset.zip for accession {acc}.")
-                # Extract only the .fna file and write to the target path
                 with zip_ref.open(fna_files[0]) as source, open(genome_path, 'wb') as target:
                     target.write(source.read())
 
             subprocess.run(['rm', '-rf', 'ncbi_dataset.zip'], check=True)
-            # print(f"Genome {acc} saved to {genome_path}.")
+
+    # Optionally, process and save metadata to a file
+    columns_names = ["trna_aa_count", "contig_count", "n50_contigs", "longest_contig", "scaffold_count", "n50_scaffolds",
+                     "longest_scaffold", "genome_size", "gc_percentage", "ambiguous_bases", "checkm_completeness",
+                     "checkm_contamination", "checkm_strain_heterogeneity", "checkm2_completeness",
+                     "checkm2_contamination", "checkm2_model", "lsu_5s_count", "ssu_count", "lsu_23s_count",
+                     "protein_count", "coding_density", "ncbi_genbank_assembly_accession", "ncbi_strain_identifiers",
+                     "ncbi_assembly_level", "ncbi_assembly_name", "ncbi_assembly_type", "ncbi_bioproject",
+                     "ncbi_biosample", "ncbi_country", "ncbi_date", "ncbi_genome_category",
+                     "ncbi_genome_representation", "ncbi_isolate", "ncbi_isolation_source", "ncbi_lat_lon",
+                     "ncbi_molecule_count", "ncbi_cds_count", "ncbi_refseq_category", "ncbi_seq_rel_date",
+                     "ncbi_spanned_gaps", "ncbi_species_taxid", "ncbi_ssu_count", "ncbi_submitter", "ncbi_taxid",
+                     "ncbi_total_gap_length", "ncbi_translation_table", "ncbi_trna_count", "ncbi_unspanned_gaps",
+                     "ncbi_version_status", "ncbi_wgs_master", "gtdbTypeDesignation", "gtdbTypeDesignationSources",
+                     "lpsnTypeDesignation", "dsmzTypeDesignation", "lpsnPriorityYear", "gtdbTypeSpeciesOfGenus",
+                     "ncbi_taxonomy", "ncbi_taxonomy_unfiltered", "gtdb_representative", "gtdb_genome_representative",
+                     "ncbi_type_material_designation", "gtdbDomain", "gtdbPhylum", "gtdbClass", "gtdbOrder",
+                     "gtdbFamily", "gtdbGenus", "gtdbSpecies"]
+    index_names = []
+    df = []
+
+    for genome in metadata:
+        acc = genome["gid"]
+        index_names.append(acc)
+        gm = fetch_genome_metadata(acc)
+        gm = parse_genome_metadata(gm)
+        df.append(gm)
 
     df = pd.DataFrame(df, index=index_names, columns=columns_names)
+    df.index.name = "Accession"
 
     if args.output:
         df.to_csv(args.output, sep="\t")
@@ -180,6 +204,5 @@ def main():
         df.to_csv(sys.stdout, sep="\t")
 
 
-if __name__ == "__main__":    
+if __name__ == "__main__":
     main()
-
